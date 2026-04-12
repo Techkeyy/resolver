@@ -171,30 +171,38 @@ export default function BetPage() {
 
       // Step 4: Send the deposit transaction
       setMsg('Depositing into vault...')
-      console.log('Sending deposit tx with params:', {
+      // Clean and format transaction params properly
+      const depositParams = {
         from: wallet,
         to: tx.to,
-        data: tx.data?.slice(0, 20) + '...',
-        value: tx.value,
-        gasLimit: tx.gasLimit || tx.gas
-      })
+        data: tx.data,
+      }
+
+      // Only add value if it exists and is not zero
+      if (tx.value && tx.value !== '0x0' && tx.value !== '0') {
+        depositParams.value = tx.value
+      }
+
+      // Only add gas if it exists - let MetaMask estimate if not
+      if (tx.gasLimit || tx.gas) {
+        // Convert to hex if it's a number
+        const gasValue = tx.gasLimit || tx.gas
+        depositParams.gas = typeof gasValue === 'number' 
+          ? '0x' + gasValue.toString(16)
+          : gasValue
+      }
+
+      console.log('Deposit params being sent:', JSON.stringify(depositParams, null, 2))
+
       const depositTx = await window.ethereum.request({
         method: 'eth_sendTransaction',
-        params: [{
-          from: wallet,
-          to: tx.to,
-          data: tx.data,
-          value: tx.value || '0x0',
-          gasLimit: tx.gasLimit || tx.gas || '0x493E0',
-          chainId: '0x2105'
-        }]
+        params: [depositParams]
       })
 
-      console.log('Deposit tx hash:', depositTx)
-      console.log('Deposit tx type:', typeof depositTx)
+      console.log('Deposit TX hash:', depositTx)
 
       if (!depositTx || depositTx.length < 10) {
-        throw new Error('Invalid transaction hash returned: ' + depositTx)
+        throw new Error('Invalid transaction hash: ' + depositTx)
       }
 
       // Step 5: Record the lock in our backend
