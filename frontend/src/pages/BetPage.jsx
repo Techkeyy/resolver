@@ -78,16 +78,29 @@ export default function BetPage() {
     setMsg('Getting deposit quote...')
     
     try {
+      // Get the correct ethereum provider (prefer MetaMask)
+      const getProvider = () => {
+        if (window.ethereum?.providers) {
+          // Multiple wallets installed - find MetaMask
+          const metamask = window.ethereum.providers.find(p => p.isMetaMask && !p.isRabby)
+          if (metamask) return metamask
+        }
+        // Single wallet or fallback
+        return window.ethereum
+      }
+
+      const provider = getProvider()
+
       // Step 1: Switch to Base (chainId 8453)
       try {
-        await window.ethereum.request({
+        await provider.request({
           method: 'wallet_switchEthereumChain',
           params: [{ chainId: '0x2105' }], // 8453 in hex
         })
       } catch (switchError) {
         // Chain not added yet — add it
         if (switchError.code === 4902) {
-          await window.ethereum.request({
+          await provider.request({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: '0x2105',
@@ -127,7 +140,7 @@ export default function BetPage() {
 
       let currentAllowance = 0
       try {
-        const allowanceResult = await window.ethereum.request({
+        const allowanceResult = await provider.request({
           method: 'eth_call',
           params: [{
             to: USDC_ADDRESS,
@@ -155,7 +168,7 @@ export default function BetPage() {
 
         setMsg('Please approve USDC in MetaMask...')
         
-        const approveTxHash = await window.ethereum.request({
+        const approveTxHash = await provider.request({
           method: 'eth_sendTransaction',
           params: [{
             from: wallet,
@@ -197,7 +210,7 @@ export default function BetPage() {
       let depositTx
       try {
         console.log('Deposit params being sent:', JSON.stringify(depositParams, null, 2))
-        depositTx = await window.ethereum.request({
+        depositTx = await provider.request({
           method: 'eth_sendTransaction',
           params: [depositParams]
         })
