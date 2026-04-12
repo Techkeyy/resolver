@@ -80,12 +80,11 @@ async function getBestUSDCVault() {
   });
 
   const vaults = toVaultList(payload);
-    const bestVault = vaults.find((vault) =>
-    vault.lpTokens &&
-    vault.lpTokens.length > 0 &&
-    vault.lpTokens[0].address &&
-    vault.lpTokens[0].address.length > 10
-    ) || vaults[0];
+  const bestVault = vaults.find((vault) => vault.isTransactional === true);
+
+  if (!bestVault) {
+    throw new Error('No suitable USDC vault found on Base');
+  }
 
   const apy = bestVault.analytics?.apy?.total || bestVault.analytics?.apy?.base || 'n/a';
 
@@ -108,25 +107,40 @@ async function getVaultByAddress(chainId, address) {
 
 async function getDepositQuote(fromWalletAddress, amountUSDC) {
   const vault = await getBestUSDCVault();
-    const lpTokenAddress = vault?.lpTokens?.[0]?.address || vault?.address;
+  // Convert USDC amount to 6-decimal units
+  const fromAmount = Math.floor(amountUSDC * 1_000_000).toString();
 
-  if (!lpTokenAddress) {
-    throw new Error('Best vault does not expose an LP token address');
+  // Use vault.address directly as toToken per LI.FI docs
+  const params = new URLSearchParams({
+    fromChain: '8453',
+    toChain: '8453',
+    fromToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    toToken: vault.address,
+    fromAddress: fromWalletAddress,
+    toAddress: fromWalletAddress,
+    fromAmount: fromAmount
+  });
+
+  console.log(`Getting Composer quote for ${amountUSDC} USDC into vault ${vault.address}`);
+
+  const res = await fetch(
+    `https://li.quest/v1/quote?${params}`,
+    { headers: { 'x-lifi-api-key': process.env.LIFI_API_KEY } }
+  );
+
+  const quote = await res.json();
+
+  if (quote.message || quote.error) {
+    throw new Error(quote.message || quote.error);
   }
 
-  const url = new URL('/v1/quote', COMPOSER_URL);
-  url.searchParams.set('fromChain', String(BASE_CHAIN_ID));
-  url.searchParams.set('toChain', String(BASE_CHAIN_ID));
-  url.searchParams.set('fromToken', USDC_ADDRESS_BASE);
-  url.searchParams.set('toToken', lpTokenAddress);
-  url.searchParams.set('fromAddress', fromWalletAddress);
-  url.searchParams.set('toAddress', fromWalletAddress);
-  url.searchParams.set('fromAmount', String(amountUSDC));
+  if (!quote.transactionRequest) {
+    console.log('Quote response:', JSON.stringify(quote, null, 2));
+    throw new Error('No transaction request in quote response');
+  }
 
-  return fetchJson(url.toString(), {
-    method: 'GET',
-    headers: earnHeaders()
-  });
+  console.log('Quote received successfully, tx to:', quote.transactionRequest.to);
+  return quote;
 }
 
 async function getUserPositions(walletAddress) {
