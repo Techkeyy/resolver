@@ -75,164 +75,98 @@ export default function BetPage() {
   async function handleLock() {
     if (!wallet) { setError('Connect wallet first'); return }
     setLoading(true); setError('')
-    setMsg('Getting deposit quote...')
-    
     try {
-      // Get the correct ethereum provider (prefer MetaMask)
-      const getProvider = () => {
-        if (window.ethereum?.providers) {
-          // Multiple wallets installed - find MetaMask
-          const metamask = window.ethereum.providers.find(p => p.isMetaMask && !p.isRabby)
-          if (metamask) return metamask
-        }
-        // Single wallet or fallback
-        return window.ethereum
-      }
-
-      const provider = getProvider()
-
-      // Step 1: Switch to Base (chainId 8453)
-      try {
-        await provider.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x2105' }], // 8453 in hex
-        })
-      } catch (switchError) {
-        // Chain not added yet — add it
-        if (switchError.code === 4902) {
-          await provider.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: '0x2105',
-              chainName: 'Base',
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              rpcUrls: ['https://mainnet.base.org'],
-              blockExplorerUrls: ['https://basescan.org']
-            }]
+      const { ethers } = await import('ethers')
+      
+      // Get provider and signer
+      const provider = new ethers.BrowserProvider(window.ethereum)
+      const network = await provider.getNetwork()
+      
+      // Switch to Base if needed
+      if (network.chainId !== 8453n) {
+        setMsg('Switching to Base network...')
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0x2105' }]
           })
-        } else {
-          throw switchError
+        } catch(switchErr) {
+          if (switchErr.code === 4902) {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: '0x2105',
+                chainName: 'Base',
+                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                rpcUrls: ['https://mainnet.base.org'],
+                blockExplorerUrls: ['https://basescan.org']
+              }]
+            })
+          } else throw switchErr
         }
+        // Re-get provider after chain switch
+        await new Promise(r => setTimeout(r, 1000))
       }
-
-      // Step 2: Get deposit quote from LI.FI via our backend
+      
+      const signer = await provider.getSigner()
+      
+      // Get deposit quote from backend
       setMsg('Getting best vault rate...')
       const quote = await getDepositQuote(bet.id, wallet)
-      console.log('Quote estimate:', JSON.stringify(quote.estimate, null, 2))
-      console.log('Approval address:', quote.estimate?.approvalAddress)
-      console.log('TX to:', quote.transactionRequest?.to)
       
       if (!quote.transactionRequest) {
         throw new Error('No transaction data in quote')
       }
-
+      
       const tx = quote.transactionRequest
-
-      // Step 3: Handle token approval using LI.FI's approvalAddress
-      const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-      const amountInUnits = Math.floor(bet.amount_usdc * 1_000_000).toString()
       const spender = quote.estimate?.approvalAddress || tx.to
-
-      // Check current allowance using eth_call
-      const paddedOwner = wallet.slice(2).padStart(64, '0')
-      const paddedSpender = spender.slice(2).padStart(64, '0')
-      const allowanceCallData = '0xdd62ed3e' + paddedOwner + paddedSpender
-
-      let currentAllowance = 0
-      try {
-        const allowanceResult = await provider.request({
-          method: 'eth_call',
-          params: [{
-            to: USDC_ADDRESS,
-            data: allowanceCallData
-          }, 'latest']
-        })
-        currentAllowance = parseInt(allowanceResult || '0x0', 16)
-      } catch(e) {
-        currentAllowance = 0
+      
+      // Check and set USDC allowance using ethers
+      const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+      const usdcAbi = [
+        'function allowance(address owner, address spender) view returns (uint256)',
+        'function approve(address spender, uint256 amount) returns (bool)'
+      ]
+      
+      const usdcContract = new ethers.Contract(USDC_ADDRESS, usdcAbi, signer)
+      const amountInUnits = BigInt(Math.floor(bet.amount_usdc * 1_000_000))
+      
+      setMsg('Checking USDC allowance...')
+      const currentAllowance = await usdcContract.allowance(wallet, spender)
+      console.log('Current allowance:', currentAllowance.toString())
+      console.log('Needed:', amountInUnits.toString())
+      
+      if (currentAllowance < amountInUnits) {
+        setMsg('Approving USDC — confirm in MetaMask...')
+        const approveTx = await usdcContract.approve(spender, amountInUnits)
+        setMsg('Waiting for approval confirmation...')
+        await approveTx.wait()
+        setMsg('Approved! Now depositing...')
+      } else {
+        setMsg('Depositing into vault...')
       }
-
-      const neededAmount = parseInt(amountInUnits)
-
-      console.log('Allowance check:', { allowance: currentAllowance, needed: neededAmount, needsApproval: currentAllowance < neededAmount })
-
-      if (currentAllowance < neededAmount) {
-        setMsg('Approving USDC spend...')
-        
-        // Encode approve(spender, amount) correctly
-        // Function selector: keccak256("approve(address,uint256)") = 0x095ea7b3
-        const paddedSpenderForApprove = spender.replace('0x', '').padStart(64, '0')
-        // Use exact amount not max - safer and cleaner
-        const paddedAmount = BigInt(amountInUnits).toString(16).padStart(64, '0')
-        const approveCallData = '0x095ea7b3' + paddedSpenderForApprove + paddedAmount
-
-        setMsg('Please approve USDC in MetaMask...')
-        
-        const approveTxHash = await provider.request({
-          method: 'eth_sendTransaction',
-          params: [{
-            from: wallet,
-            to: USDC_ADDRESS,
-            data: approveCallData
-          }]
-        })
-        
-        console.log('Approval tx hash:', approveTxHash)
-        setMsg('Approval confirmed, depositing...')
-        await new Promise(resolve => setTimeout(resolve, 4000))
-        console.log('Approval done, now sending deposit...')
-        console.log('TX object:', JSON.stringify(tx, null, 2))
-      }
-
-      // Step 4: Send the deposit transaction
-      setMsg('Depositing into vault...')
-      // Clean and format transaction params properly
-      const depositParams = {
-        from: wallet,
+      
+      // Send deposit transaction
+      setMsg('Confirm deposit in MetaMask...')
+      const depositTx = await signer.sendTransaction({
         to: tx.to,
         data: tx.data,
-      }
-
-      // Only add value if it exists and is not zero
-      if (tx.value && tx.value !== '0x0' && tx.value !== '0') {
-        depositParams.value = tx.value
-      }
-
-      // Only add gas if it exists - let MetaMask estimate if not
-      if (tx.gasLimit || tx.gas) {
-        // Convert to hex if it's a number
-        const gasValue = tx.gasLimit || tx.gas
-        depositParams.gas = typeof gasValue === 'number' 
-          ? '0x' + gasValue.toString(16)
-          : gasValue
-      }
-
-      let depositTx
-      try {
-        console.log('Deposit params being sent:', JSON.stringify(depositParams, null, 2))
-        depositTx = await provider.request({
-          method: 'eth_sendTransaction',
-          params: [depositParams]
-        })
-
-        console.log('Deposit TX hash:', depositTx)
-      } catch(depositError) {
-        console.log('DEPOSIT FAILED:', depositError.code, depositError.message)
-        throw depositError
-      }
-
-      if (!depositTx || depositTx.length < 10) {
-        throw new Error('Invalid transaction hash: ' + depositTx)
-      }
-
-      // Step 5: Record the lock in our backend
-      setMsg('Confirming...')
-      const updated = await lockFunds(bet.id, wallet, depositTx)
+        value: tx.value ? BigInt(tx.value) : 0n,
+        gasLimit: tx.gasLimit ? BigInt(tx.gasLimit) : undefined
+      })
+      
+      setMsg('Waiting for deposit confirmation...')
+      const receipt = await depositTx.wait()
+      console.log('Deposit confirmed:', receipt.hash)
+      
+      // Record in backend
+      const updated = await lockFunds(bet.id, wallet, receipt.hash)
       setBet(updated)
       setMsg('Funds locked into vault! 🔒')
-
-    } catch (e) {
-      if (e.code === 4001) {
+      
+    } catch(e) {
+      console.error('Lock error:', e)
+      if (e.code === 4001 || e.code === 'ACTION_REJECTED') {
         setError('Transaction rejected by user')
       } else {
         setError(e.message || 'Transaction failed')
