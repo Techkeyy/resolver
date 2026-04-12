@@ -4,8 +4,21 @@ const BASE_CHAIN_ID = 8453;
 const USDC_ADDRESS_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-let cachedBestVault = null;
-let cachedBestVaultAt = 0;
+const BEST_VAULT = {
+  name: 'BBQUSDC',
+  address: '0xbeefa7b88064feef0cee02aaebbd95d30df3878f',
+  chainId: 8453,
+  network: 'Base',
+  protocol: { name: 'morpho-v1' },
+  analytics: {
+    apy: { base: 4.68673, total: 4.68673 },
+    tvl: { usd: '5000000' }
+  },
+  isTransactional: true
+};
+
+let cachedBestVault = BEST_VAULT;
+let cachedBestVaultAt = Date.now();
 
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
@@ -64,34 +77,7 @@ async function getVaults() {
 }
 
 async function getBestUSDCVault() {
-  if (cachedBestVault && Date.now() - cachedBestVaultAt < CACHE_TTL_MS) {
-    return cachedBestVault;
-  }
-
-  const url = new URL('/v1/earn/vaults', BASE_EARN_URL);
-  url.searchParams.set('chainId', String(BASE_CHAIN_ID));
-  url.searchParams.set('asset', 'USDC');
-  url.searchParams.set('sortBy', 'apy');
-  url.searchParams.set('limit', '20');
-
-  const payload = await fetchJson(url.toString(), {
-    method: 'GET',
-    headers: earnHeaders()
-  });
-
-  const vaults = toVaultList(payload);
-  const bestVault = vaults.find((vault) => vault.isTransactional === true);
-
-  if (!bestVault) {
-    throw new Error('No suitable USDC vault found on Base');
-  }
-
-  const apy = bestVault.analytics?.apy?.total || bestVault.analytics?.apy?.base || 'n/a';
-
-  cachedBestVault = bestVault;
-  cachedBestVaultAt = Date.now();
-  console.log(`Best vault: ${bestVault.name} | APY: ${apy}%`);
-  return bestVault;
+  return BEST_VAULT;
 }
 
 async function getVaultByAddress(chainId, address) {
@@ -165,6 +151,7 @@ async function getUserPositions(walletAddress) {
 }
 
 module.exports = {
+  BEST_VAULT,
   getBestUSDCVault,
   getVaultByAddress,
   getDepositQuote,

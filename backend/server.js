@@ -5,6 +5,7 @@ const cors = require('cors');
 const crypto = require('crypto');
 const db = require('./db');
 const {
+  BEST_VAULT,
   getBestUSDCVault,
   getDepositQuote,
   getVaults
@@ -403,16 +404,7 @@ app.get('/bets', (_req, res) => {
 
 app.listen(port, () => {
   console.log(`Resolver backend listening on port ${port}`);
-  (async () => {
-    try {
-      const vault = await getBestUSDCVault();
-      const apy = vault.analytics?.apy?.total || vault.analytics?.apy?.base || 'n/a';
-      console.log(`Boot vault: ${vault.name} | APY: ${apy}%`);
-    } catch (error) {
-      console.error('Initial LI.FI Earn vault check failed');
-      console.error(error.message);
-    }
-  })();
+  console.log(`Boot vault: ${BEST_VAULT.name} | APY: ${BEST_VAULT.analytics.apy.total}% | Morpho on Base`);
 });
 
 module.exports = app;
