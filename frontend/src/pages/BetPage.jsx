@@ -105,12 +105,16 @@ export default function BetPage() {
       // Step 2: Get deposit quote from LI.FI via our backend
       setMsg('Getting best vault rate...')
       const quote = await getDepositQuote(bet.id, wallet)
+      console.log('Quote estimate:', JSON.stringify(quote.estimate, null, 2))
+      console.log('Approval address:', quote.estimate?.approvalAddress)
+      console.log('TX to:', quote.transactionRequest?.to)
       
       if (!quote.transactionRequest) {
         throw new Error('No transaction data in quote')
       }
 
       const tx = quote.transactionRequest
+      const spender = quote.estimate?.approvalAddress || tx.to
 
       // Step 3: Check USDC allowance and approve if needed
       // USDC on Base
@@ -120,7 +124,7 @@ export default function BetPage() {
       // Encode allowance check: allowance(owner, spender)
       const allowanceData = '0xdd62ed3e' + 
         wallet.slice(2).padStart(64, '0') + 
-        (tx.to || '').slice(2).padStart(64, '0')
+        spender.slice(2).padStart(64, '0')
 
       const allowanceHex = await window.ethereum.request({
         method: 'eth_call',
@@ -135,7 +139,7 @@ export default function BetPage() {
         // Encode approve(spender, amount)
         const maxUint256 = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
         const approveData = '0x095ea7b3' + 
-          (tx.to || '').slice(2).padStart(64, '0') + 
+          spender.slice(2).padStart(64, '0') + 
           maxUint256
 
         const approveTx = await window.ethereum.request({
