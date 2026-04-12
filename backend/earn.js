@@ -72,7 +72,7 @@ async function getBestUSDCVault() {
   url.searchParams.set('chainId', String(BASE_CHAIN_ID));
   url.searchParams.set('asset', 'USDC');
   url.searchParams.set('sortBy', 'apy');
-  url.searchParams.set('limit', '10');
+  url.searchParams.set('limit', '20');
 
   const payload = await fetchJson(url.toString(), {
     method: 'GET',
@@ -80,11 +80,13 @@ async function getBestUSDCVault() {
   });
 
   const vaults = toVaultList(payload);
-  if (!vaults || vaults.length === 0) {
-    throw new Error('No USDC vaults found on Arbitrum');
-  }
+    const bestVault = vaults.find((vault) =>
+    vault.lpTokens &&
+    vault.lpTokens.length > 0 &&
+    vault.lpTokens[0].address &&
+    vault.lpTokens[0].address.length > 10
+    ) || vaults[0];
 
-  const bestVault = vaults[0];
   const apy = bestVault.analytics?.apy?.total || bestVault.analytics?.apy?.base || 'n/a';
 
   cachedBestVault = bestVault;
@@ -106,7 +108,7 @@ async function getVaultByAddress(chainId, address) {
 
 async function getDepositQuote(fromWalletAddress, amountUSDC) {
   const vault = await getBestUSDCVault();
-  const lpTokenAddress = vault?.lpTokens?.[0]?.address;
+    const lpTokenAddress = vault?.lpTokens?.[0]?.address || vault?.address;
 
   if (!lpTokenAddress) {
     throw new Error('Best vault does not expose an LP token address');
