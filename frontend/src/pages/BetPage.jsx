@@ -114,7 +114,6 @@ export default function BetPage() {
       }
 
       const tx = quote.transactionRequest
-      const spender = quote.estimate?.approvalAddress || tx.to
 
       // Step 3: Handle token approval using LI.FI's approvalAddress
       const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
