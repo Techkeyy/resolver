@@ -116,45 +116,56 @@ export default function BetPage() {
       const tx = quote.transactionRequest
       const spender = quote.estimate?.approvalAddress || tx.to
 
-      // Step 3: Check USDC allowance and approve if needed
-      // USDC on Base
+      // Step 3: Handle token approval using LI.FI's approvalAddress
       const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
       const amountInUnits = Math.floor(bet.amount_usdc * 1_000_000).toString()
-      
-      // Encode allowance check: allowance(owner, spender)
-      const allowanceData = '0xdd62ed3e' + 
-        wallet.slice(2).padStart(64, '0') + 
-        spender.slice(2).padStart(64, '0')
+      const spender = quote.estimate?.approvalAddress || tx.to
 
-      const allowanceHex = await window.ethereum.request({
-        method: 'eth_call',
-        params: [{ to: USDC_ADDRESS, data: allowanceData }, 'latest']
-      })
-      
-      const allowance = parseInt(allowanceHex, 16)
-      const needed = parseInt(amountInUnits)
+      // Check current allowance using eth_call
+      const paddedOwner = wallet.slice(2).padStart(64, '0')
+      const paddedSpender = spender.slice(2).padStart(64, '0')
+      const allowanceCallData = '0xdd62ed3e' + paddedOwner + paddedSpender
 
-      if (allowance < needed) {
+      let currentAllowance = 0
+      try {
+        const allowanceResult = await window.ethereum.request({
+          method: 'eth_call',
+          params: [{
+            to: USDC_ADDRESS,
+            data: allowanceCallData
+          }, 'latest']
+        })
+        currentAllowance = parseInt(allowanceResult || '0x0', 16)
+      } catch(e) {
+        currentAllowance = 0
+      }
+
+      const neededAmount = parseInt(amountInUnits)
+
+      if (currentAllowance < neededAmount) {
         setMsg('Approving USDC spend...')
-        // Encode approve(spender, amount)
-        const maxUint256 = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-        const approveData = '0x095ea7b3' + 
-          spender.slice(2).padStart(64, '0') + 
-          maxUint256
+        
+        // Encode approve(spender, amount) correctly
+        // Function selector: keccak256("approve(address,uint256)") = 0x095ea7b3
+        const paddedSpenderForApprove = spender.replace('0x', '').padStart(64, '0')
+        // Use exact amount not max - safer and cleaner
+        const paddedAmount = BigInt(amountInUnits).toString(16).padStart(64, '0')
+        const approveCallData = '0x095ea7b3' + paddedSpenderForApprove + paddedAmount
 
-        const approveTx = await window.ethereum.request({
+        setMsg('Please approve USDC in MetaMask...')
+        
+        const approveTxHash = await window.ethereum.request({
           method: 'eth_sendTransaction',
           params: [{
             from: wallet,
             to: USDC_ADDRESS,
-            data: approveData,
-            chainId: '0x2105'
+            data: approveCallData
           }]
         })
         
-        setMsg('Approval sent, waiting...')
-        // Wait 3 seconds for approval to propagate
-        await new Promise(resolve => setTimeout(resolve, 3000))
+        console.log('Approval tx hash:', approveTxHash)
+        setMsg('Approval confirmed, depositing...')
+        await new Promise(resolve => setTimeout(resolve, 4000))
       }
 
       // Step 4: Send the deposit transaction
