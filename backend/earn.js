@@ -124,8 +124,7 @@ async function getDepositQuote(fromWalletAddress, amountUSDC) {
   console.log(`Getting Composer quote for ${amountUSDC} USDC into vault ${vault.address}`);
 
   const res = await fetch(
-    `https://li.quest/v1/quote?${params}`,
-    { headers: { 'x-lifi-api-key': process.env.LIFI_API_KEY } }
+    `https://li.quest/v1/quote?${params}`
   );
 
   const quote = await res.json();
