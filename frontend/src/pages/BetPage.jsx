@@ -167,6 +167,8 @@ export default function BetPage() {
         console.log('Approval tx hash:', approveTxHash)
         setMsg('Approval confirmed, depositing...')
         await new Promise(resolve => setTimeout(resolve, 4000))
+        console.log('Approval done, now sending deposit...')
+        console.log('TX object:', JSON.stringify(tx, null, 2))
       }
 
       // Step 4: Send the deposit transaction
@@ -192,14 +194,19 @@ export default function BetPage() {
           : gasValue
       }
 
-      console.log('Deposit params being sent:', JSON.stringify(depositParams, null, 2))
+      let depositTx
+      try {
+        console.log('Deposit params being sent:', JSON.stringify(depositParams, null, 2))
+        depositTx = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [depositParams]
+        })
 
-      const depositTx = await window.ethereum.request({
-        method: 'eth_sendTransaction',
-        params: [depositParams]
-      })
-
-      console.log('Deposit TX hash:', depositTx)
+        console.log('Deposit TX hash:', depositTx)
+      } catch(depositError) {
+        console.log('DEPOSIT FAILED:', depositError.code, depositError.message)
+        throw depositError
+      }
 
       if (!depositTx || depositTx.length < 10) {
         throw new Error('Invalid transaction hash: ' + depositTx)
