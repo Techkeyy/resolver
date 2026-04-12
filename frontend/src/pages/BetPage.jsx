@@ -141,6 +141,8 @@ export default function BetPage() {
 
       const neededAmount = parseInt(amountInUnits)
 
+      console.log('Allowance check:', { allowance: currentAllowance, needed: neededAmount, needsApproval: currentAllowance < neededAmount })
+
       if (currentAllowance < neededAmount) {
         setMsg('Approving USDC spend...')
         
@@ -169,6 +171,13 @@ export default function BetPage() {
 
       // Step 4: Send the deposit transaction
       setMsg('Depositing into vault...')
+      console.log('Sending deposit tx with params:', {
+        from: wallet,
+        to: tx.to,
+        data: tx.data?.slice(0, 20) + '...',
+        value: tx.value,
+        gasLimit: tx.gasLimit || tx.gas
+      })
       const depositTx = await window.ethereum.request({
         method: 'eth_sendTransaction',
         params: [{
@@ -180,6 +189,13 @@ export default function BetPage() {
           chainId: '0x2105'
         }]
       })
+
+      console.log('Deposit tx hash:', depositTx)
+      console.log('Deposit tx type:', typeof depositTx)
+
+      if (!depositTx || depositTx.length < 10) {
+        throw new Error('Invalid transaction hash returned: ' + depositTx)
+      }
 
       // Step 5: Record the lock in our backend
       setMsg('Confirming...')
