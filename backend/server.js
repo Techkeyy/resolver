@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const db = require('./db');
+const { pool, initDB } = require('./db');
 const {
   BEST_VAULT,
   getBestUSDCVault,
@@ -29,13 +29,27 @@ function generateInviteCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-function getBetById(id) {
-  return db.get('bets').find({ id }).value() || null;
+async function getBetById(id) {
+  const r = await pool.query('SELECT * FROM bets WHERE id = $1', [id]);
+  return r.rows[0] || null;
 }
 
-function getBetByInviteCode(inviteCode) {
-  const code = String(inviteCode || '').toUpperCase();
-  return db.get('bets').find((bet) => String(bet.invite_code || '').toUpperCase() === code).value() || null;
+async function getBetByInviteCode(code) {
+  const r = await pool.query(
+    'SELECT * FROM bets WHERE UPPER(invite_code) = UPPER($1)', [code]
+  );
+  return r.rows[0] || null;
+}
+
+async function updateBet(id, fields) {
+  const keys = Object.keys(fields);
+  const values = Object.values(fields);
+  const setClause = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
+  const r = await pool.query(
+    `UPDATE bets SET ${setClause} WHERE id = $1 RETURNING *`,
+    [id, ...values]
+  );
+  return r.rows[0];
 }
 
 function earnHeaders() {
@@ -75,7 +89,7 @@ function summarizeVaults(vaults) {
   }));
 }
 
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
@@ -115,8 +129,8 @@ app.get('/earn/debug-vaults', async (_req, res) => {
   }
 });
 
-app.post('/bets/:id/quote', (req, res) => {
-  const bet = getBetById(req.params.id);
+app.post('/bets/:id/quote', async (req, res) => {
+  const bet = await getBetById(req.params.id);
 
   if (!bet) {
     return sendError(res, 404, 'Bet not found');
@@ -128,9 +142,12 @@ app.post('/bets/:id/quote', (req, res) => {
 
   const { user_address } = req.body || {};
 
-  getDepositQuote(user_address, bet.amount_usdc)
-    .then((quote) => res.json(quote))
-    .catch((error) => sendError(res, error.status || 500, error.message));
+  try {
+    const quote = await getDepositQuote(user_address, bet.amount_usdc);
+    res.json(quote);
+  } catch (error) {
+    sendError(res, error.status || 500, error.message);
+  }
 });
 
 app.post('/bets', async (req, res) => {
@@ -172,7 +189,18 @@ app.post('/bets', async (req, res) => {
       resolved_at: null
     };
 
-    db.get('bets').push(bet).write();
+    await pool.query(
+      `INSERT INTO bets (id,invite_code,statement,amount_usdc,
+       creator_address,opponent_address,status,creator_locked,
+       opponent_locked,vault_address,vault_chain_id,
+       creator_deposit_tx,opponent_deposit_tx,
+       proposed_winner_address,proposed_by_address,
+       winner_address,payout_tx)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      [bet.id, bet.invite_code, bet.statement, bet.amount_usdc,
+       bet.creator_address, null, 'CREATED', false, false,
+       bet.vault_address, 8453, null, null, null, null, null, null]
+    );
 
     return res.status(201).json({
       ...bet,
@@ -183,8 +211,8 @@ app.post('/bets', async (req, res) => {
   }
 });
 
-app.get('/bets/invite/:invite_code', (req, res) => {
-  const bet = getBetByInviteCode(req.params.invite_code);
+app.get('/bets/invite/:invite_code', async (req, res) => {
+  const bet = await getBetByInviteCode(req.params.invite_code);
 
   if (!bet) {
     return sendError(res, 404, 'Bet not found');
@@ -193,8 +221,8 @@ app.get('/bets/invite/:invite_code', (req, res) => {
   return res.json(bet);
 });
 
-app.get('/bets/:id', (req, res) => {
-  const bet = getBetById(req.params.id);
+app.get('/bets/:id', async (req, res) => {
+  const bet = await getBetById(req.params.id);
 
   if (!bet) {
     return sendError(res, 404, 'Bet not found');
@@ -203,8 +231,8 @@ app.get('/bets/:id', (req, res) => {
   return res.json(bet);
 });
 
-app.post('/bets/invite/:invite_code/accept', (req, res) => {
-  const bet = getBetByInviteCode(req.params.invite_code);
+app.post('/bets/invite/:invite_code/accept', async (req, res) => {
+  const bet = await getBetByInviteCode(req.params.invite_code);
 
   if (!bet) {
     return sendError(res, 404, 'Bet not found');
@@ -224,19 +252,16 @@ app.post('/bets/invite/:invite_code/accept', (req, res) => {
     return sendError(res, 400, 'Cannot accept your own bet');
   }
 
-  const updatedBet = db.get('bets')
-    .find({ id: bet.id })
-    .assign({
-      opponent_address,
-      status: 'ACCEPTED'
-    })
-    .write();
+  const updatedBet = await updateBet(bet.id, {
+    opponent_address,
+    status: 'ACCEPTED'
+  });
 
   return res.json(updatedBet);
 });
 
-app.post('/bets/:id/lock', (req, res) => {
-  const bet = getBetById(req.params.id);
+app.post('/bets/:id/lock', async (req, res) => {
+  const bet = await getBetById(req.params.id);
 
   if (!bet) {
     return sendError(res, 404, 'Bet not found');
@@ -272,28 +297,17 @@ app.post('/bets/:id/lock', (req, res) => {
 
   if (updates.creator_locked && updates.opponent_locked) {
     updates.status = 'LOCKED';
-  } else if (bet.creator_locked && bet.opponent_locked) {
+  } else if ((isCreator ? true : bet.creator_locked) && (isOpponent ? true : bet.opponent_locked)) {
     updates.status = 'LOCKED';
   }
 
-  const nextBet = db.get('bets')
-    .find({ id: bet.id })
-    .assign(updates)
-    .write();
-
-  if (nextBet.creator_locked && nextBet.opponent_locked && nextBet.status !== 'LOCKED') {
-    db.get('bets')
-      .find({ id: bet.id })
-      .assign({ status: 'LOCKED' })
-      .write();
-    nextBet.status = 'LOCKED';
-  }
+  const nextBet = await updateBet(bet.id, updates);
 
   return res.json(nextBet);
 });
 
-app.post('/bets/:id/resolve', (req, res) => {
-  const bet = getBetById(req.params.id);
+app.post('/bets/:id/resolve', async (req, res) => {
+  const bet = await getBetById(req.params.id);
 
   if (!bet) {
     return sendError(res, 404, 'Bet not found');
@@ -319,19 +333,16 @@ app.post('/bets/:id/resolve', (req, res) => {
     return sendError(res, 400, 'Not a participant');
   }
 
-  const updatedBet = db.get('bets')
-    .find({ id: bet.id })
-    .assign({
-      proposed_winner_address: winner_address,
-      proposed_by_address: resolver_address
-    })
-    .write();
+  const updatedBet = await updateBet(bet.id, {
+    proposed_winner_address: winner_address,
+    proposed_by_address: resolver_address
+  });
 
   return res.json(updatedBet);
 });
 
-app.post('/bets/:id/confirm', (req, res) => {
-  const bet = getBetById(req.params.id);
+app.post('/bets/:id/confirm', async (req, res) => {
+  const bet = await getBetById(req.params.id);
 
   if (!bet) {
     return sendError(res, 404, 'Bet not found');
@@ -355,20 +366,17 @@ app.post('/bets/:id/confirm', (req, res) => {
     return sendError(res, 400, 'Proposer cannot confirm their own resolution');
   }
 
-  const updatedBet = db.get('bets')
-    .find({ id: bet.id })
-    .assign({
-      winner_address: bet.proposed_winner_address,
-      status: 'RESOLVED',
-      resolved_at: new Date().toISOString()
-    })
-    .write();
+  const updatedBet = await updateBet(bet.id, {
+    winner_address: bet.proposed_winner_address,
+    status: 'RESOLVED',
+    resolved_at: new Date()
+  });
 
   return res.json(updatedBet);
 });
 
-app.post('/bets/:id/dispute', (req, res) => {
-  const bet = getBetById(req.params.id);
+app.post('/bets/:id/dispute', async (req, res) => {
+  const bet = await getBetById(req.params.id);
 
   if (!bet) {
     return sendError(res, 404, 'Bet not found');
@@ -388,23 +396,32 @@ app.post('/bets/:id/dispute', (req, res) => {
     return sendError(res, 400, 'Not a participant');
   }
 
-  const updatedBet = db.get('bets')
-    .find({ id: bet.id })
-    .assign({
-      status: 'DISPUTED'
-    })
-    .write();
+  const updatedBet = await updateBet(bet.id, {
+    status: 'DISPUTED'
+  });
 
   return res.json(updatedBet);
 });
 
-app.get('/bets', (_req, res) => {
-  return res.json(db.get('bets').value());
+app.get('/bets', async (_req, res) => {
+  const r = await pool.query('SELECT * FROM bets ORDER BY created_at DESC');
+  return res.json(r.rows);
 });
 
-app.listen(port, () => {
-  console.log(`Resolver backend listening on port ${port}`);
-  console.log(`Boot vault: ${BEST_VAULT.name} | APY: ${BEST_VAULT.analytics.apy.total}% | Morpho on Base`);
-});
+async function start() {
+  try {
+    await initDB();
+    app.listen(port, () => {
+      console.log(`Resolver backend listening on port ${port}`);
+      console.log(`Boot vault: ${BEST_VAULT.name} | APY: ${BEST_VAULT.analytics.apy.total}% | Morpho on Base`);
+    });
+  } catch (error) {
+    console.error('Failed to initialize PostgreSQL');
+    console.error(error.message);
+    process.exit(1);
+  }
+}
+
+start();
 
 module.exports = app;
