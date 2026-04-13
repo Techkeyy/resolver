@@ -80,105 +80,149 @@ export default function BetPage() {
 
   async function handleLock() {
     if (!wallet) { setError('Connect wallet first'); return }
-    setLoading(true); setError('')
-    setMsg('Getting deposit quote...')
-    
+    setLoading(true); setError(''); setMsg('')
+
     try {
-      // Step 1: Switch to Base (chainId 8453)
-      try {
-        await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x2105' }],
-        })
-      } catch (switchError) {
-        if (switchError.code === 4902) {
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: '0x2105',
-              chainName: 'Base',
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              rpcUrls: ['https://mainnet.base.org'],
-              blockExplorerUrls: ['https://basescan.org']
-            }]
-          })
-        } else {
-          throw switchError
+      // Step 1: ensure Base network
+      if (window.ethereum) {
+        const chainId = await window.ethereum.request({ method: 'eth_chainId' })
+        if (chainId !== '0x2105') {
+          setMsg('Switching to Base...')
+          try {
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: '0x2105' }]
+            })
+          } catch(sw) {
+            if (sw.code === 4902) {
+              await window.ethereum.request({
+                method: 'wallet_addEthereumChain',
+                params: [{
+                  chainId: '0x2105',
+                  chainName: 'Base',
+                  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                  rpcUrls: ['https://mainnet.base.org'],
+                  blockExplorerUrls: ['https://basescan.org']
+                }]
+              })
+            } else throw sw
+          }
+          await new Promise(r => setTimeout(r, 800))
         }
       }
 
-      // Step 2: Get deposit quote from LI.FI via our backend
-      setMsg('Getting best vault rate...')
+      // Step 2: get LI.FI Composer quote
+      setMsg('Getting vault quote...')
       const quote = await getDepositQuote(bet.id, wallet)
-      
-      if (!quote.transactionRequest) {
-        throw new Error('No transaction data in quote')
-      }
+      if (!quote?.transactionRequest) throw new Error('No transaction data returned')
 
       const tx = quote.transactionRequest
+      const spender = quote.estimate?.approvalAddress || tx.to
+      const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+      const amountHex = '0x' + BigInt(Math.floor(bet.amount_usdc * 1_000_000)).toString(16)
 
-      // Step 3: Check USDC allowance and approve if needed
-      const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-      const amountInUnits = Math.floor(bet.amount_usdc * 1_000_000).toString()
-      
-      // Encode allowance check: allowance(owner, spender)
-      const allowanceData = '0xdd62ed3e' + 
-        wallet.slice(2).padStart(64, '0') + 
-        (tx.to || '').slice(2).padStart(64, '0')
+      // Step 3: check allowance via eth_call
+      setMsg('Checking USDC allowance...')
+      const allowanceData = '0xdd62ed3e'
+        + wallet.slice(2).padStart(64, '0')
+        + spender.slice(2).padStart(64, '0')
 
-      const allowanceHex = await window.ethereum.request({
-        method: 'eth_call',
-        params: [{ to: USDC_ADDRESS, data: allowanceData }, 'latest']
-      })
-      
-      const allowance = parseInt(allowanceHex, 16)
-      const needed = parseInt(amountInUnits)
+      let needsApproval = true
+      try {
+        const result = await window.ethereum.request({
+          method: 'eth_call',
+          params: [{ to: USDC, data: allowanceData }, 'latest']
+        })
+        const current = BigInt(result || '0x0')
+        const needed = BigInt(Math.floor(bet.amount_usdc * 1_000_000))
+        needsApproval = current < needed
+      } catch(e) {
+        needsApproval = true
+      }
 
-      if (allowance < needed) {
-        setMsg('Approving USDC spend...')
-        // Encode approve(spender, amount)
-        const maxUint256 = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-        const approveData = '0x095ea7b3' + 
-          (tx.to || '').slice(2).padStart(64, '0') + 
-          maxUint256
+      // Step 4: approve if needed
+      if (needsApproval) {
+        setMsg('Approve USDC in MetaMask...')
+        const paddedSpender = spender.slice(2).padStart(64, '0')
+        const paddedAmount = BigInt(Math.floor(bet.amount_usdc * 1_000_000))
+          .toString(16).padStart(64, '0')
+        const approveData = '0x095ea7b3' + paddedSpender + paddedAmount
 
-        const approveTx = await window.ethereum.request({
+        const approveTxHash = await window.ethereum.request({
           method: 'eth_sendTransaction',
           params: [{
             from: wallet,
-            to: USDC_ADDRESS,
-            data: approveData,
-            chainId: '0x2105'
+            to: USDC,
+            data: approveData
+            // NO gasLimit — let MetaMask estimate
           }]
         })
-        
-        setMsg('Approval sent, waiting...')
-        await new Promise(resolve => setTimeout(resolve, 3000))
+        console.log('Approve tx:', approveTxHash)
+        setMsg('Approval sent, waiting 5s...')
+        await new Promise(r => setTimeout(r, 5000))
       }
 
-      // Step 4: Send the deposit transaction
-      setMsg('Depositing into vault...')
-      const depositTx = await window.ethereum.request({
+      // Step 5: send deposit — NO gasLimit, NO chainId field
+      setMsg('Confirm deposit in MetaMask...')
+      console.log('Deposit to:', tx.to)
+      console.log('Value:', tx.value)
+      console.log('Data prefix:', tx.data?.slice(0, 10))
+
+      const depositTxHash = await window.ethereum.request({
         method: 'eth_sendTransaction',
         params: [{
           from: wallet,
           to: tx.to,
           data: tx.data,
-          value: tx.value || '0x0',
-          gasLimit: tx.gasLimit || tx.gas || '0x493E0',
-          chainId: '0x2105'
+          value: tx.value && tx.value !== '0x0' && tx.value !== '0'
+            ? tx.value
+            : undefined
+          // NO gasLimit — this is the key fix
+          // NO chainId — MetaMask already knows
         }]
       })
 
-      // Step 5: Record the lock in our backend
-      setMsg('Confirming...')
-      const updated = await lockFunds(bet.id, wallet, depositTx)
+      console.log('Deposit tx hash:', depositTxHash)
+      if (!depositTxHash || depositTxHash.length < 20) {
+        throw new Error('Invalid tx hash returned: ' + depositTxHash)
+      }
+
+      // Step 6: wait for confirmation then record
+      setMsg('Waiting for on-chain confirmation...')
+      
+      // Poll for receipt
+      let receipt = null
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 2000))
+        try {
+          receipt = await window.ethereum.request({
+            method: 'eth_getTransactionReceipt',
+            params: [depositTxHash]
+          })
+          if (receipt) break
+        } catch(e) {}
+      }
+
+      if (!receipt) {
+        // tx submitted but receipt not found yet — record anyway with submitted hash
+        console.warn('Receipt not found after polling, recording with submitted hash')
+      }
+
+      const finalHash = receipt?.transactionHash || depositTxHash
+      console.log('Final confirmed hash:', finalHash)
+
+      // Step 7: record in backend
+      setMsg('Recording deposit...')
+      const updated = await lockFunds(bet.id, wallet, finalHash)
       setBet(updated)
       setMsg('Funds locked into vault! 🔒')
 
-    } catch (e) {
-      if (e.code === 4001) {
-        setError('Transaction rejected by user')
+    } catch(e) {
+      console.error('Lock failed:', e)
+      if (e.code === 4001 || e.code === 'ACTION_REJECTED') {
+        setError('Transaction cancelled')
+      } else if (e.message?.includes('insufficient funds')) {
+        setError('Insufficient ETH for gas. Get ETH on Base first.')
       } else {
         setError(e.message || 'Transaction failed')
       }
