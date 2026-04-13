@@ -4,6 +4,7 @@ import {
   getBetByInviteCode, acceptBet, lockFunds, getDepositQuote,
   resolveBet, confirmResolution, disputeBet
 } from '../api'
+import LiFiDepositWidget from '../components/LiFiDepositWidget'
 
 function shortAddr(addr) {
   if (!addr) return '???'
@@ -34,6 +35,7 @@ export default function BetPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
+  const [showDepositWidget, setShowDepositWidget] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -74,115 +76,20 @@ export default function BetPage() {
 
   async function handleLock() {
     if (!wallet) { setError('Connect wallet first'); return }
-    setLoading(true); setError('')
-    try {
-      const { ethers } = await import('ethers')
-      
-      // Get provider and signer
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const network = await provider.getNetwork()
-      
-      // Switch to Base if needed
-      if (network.chainId !== 8453n) {
-        setMsg('Switching to Base network...')
-        try {
-          await window.ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: '0x2105' }]
-          })
-        } catch(switchErr) {
-          if (switchErr.code === 4902) {
-            await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: '0x2105',
-                chainName: 'Base',
-                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-                rpcUrls: ['https://mainnet.base.org'],
-                blockExplorerUrls: ['https://basescan.org']
-              }]
-            })
-          } else throw switchErr
-        }
-        // Re-get provider after chain switch
-        await new Promise(r => setTimeout(r, 1000))
-      }
-      
-      const signer = await provider.getSigner()
-      
-      // Get deposit quote from backend
-      setMsg('Getting best vault rate...')
-      const quote = await getDepositQuote(bet.id, wallet)
-      
-      if (!quote.transactionRequest) {
-        throw new Error('No transaction data in quote')
-      }
-      
-      const tx = quote.transactionRequest
-      const spender = quote.estimate?.approvalAddress || tx.to
-      
-      // Check and set USDC allowance using ethers
-      const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-      const usdcAbi = [
-        'function allowance(address owner, address spender) view returns (uint256)',
-        'function approve(address spender, uint256 amount) returns (bool)'
-      ]
-      
-      const usdcContract = new ethers.Contract(USDC_ADDRESS, usdcAbi, signer)
-      const amountInUnits = BigInt(Math.floor(bet.amount_usdc * 1_000_000))
-      
-      setMsg('Checking USDC allowance...')
-      const currentAllowance = await usdcContract.allowance(wallet, spender)
-      console.log('Current allowance:', currentAllowance.toString())
-      console.log('Needed:', amountInUnits.toString())
-      
-      if (currentAllowance < amountInUnits) {
-        setMsg('Approving USDC — confirm in MetaMask...')
-        const approveTx = await usdcContract.approve(spender, amountInUnits)
-        setMsg('Waiting for approval confirmation...')
-        await approveTx.wait()
-        setMsg('Approved! Now depositing...')
-      } else {
-        setMsg('Depositing into vault...')
-      }
-      
-      // Send deposit transaction
-      setMsg('Confirm deposit in MetaMask...')
-      const depositTx = await signer.sendTransaction({
-        to: tx.to,
-        data: tx.data,
-        value: tx.value ? BigInt(tx.value) : 0n,
-        gasLimit: tx.gasLimit ? BigInt(tx.gasLimit) : undefined
-      })
-      
-      setMsg('Waiting for deposit confirmation...')
-      const receipt = await depositTx.wait()
-      console.log('Deposit confirmed:', receipt.hash)
-      
-      // Record in backend
-      const updated = await lockFunds(bet.id, wallet, receipt.hash)
-      setBet(updated)
-      setMsg('Funds locked into vault! 🔒')
-      
-    } catch(e) {
-      console.error('Lock error:', e)
-      if (e.code === 4001 || e.code === 'ACTION_REJECTED') {
-        setError('Transaction rejected by user')
-      } else {
-        setError(e.message || 'Transaction failed')
-      }
-    }
-    setLoading(false)
+    setShowDepositWidget(true)
   }
 
-  async function handleResolve(winnerAddress) {
-    if (!wallet) { setError('Connect wallet first'); return }
-    setLoading(true); setError('')
+  async function handleDepositSuccess(txHash) {
+    setShowDepositWidget(false)
+    setLoading(true)
+    setMsg('Recording deposit...')
     try {
-      const updated = await resolveBet(bet.id, wallet, winnerAddress)
+      const updated = await lockFunds(bet.id, wallet, txHash)
       setBet(updated)
-      setMsg('Resolution proposed. Waiting for opponent to confirm.')
-    } catch (e) { setError(e.message) }
+      setMsg('Funds locked into vault! 🔒')
+    } catch(e) {
+      setError(e.message)
+    }
     setLoading(false)
   }
 
@@ -422,6 +329,16 @@ export default function BetPage() {
         >
           Connect Wallet to Participate
         </button>
+      )}
+
+      {showDepositWidget && (
+        <LiFiDepositWidget
+          betId={bet.id}
+          userAddress={wallet}
+          amount={bet.amount_usdc}
+          onSuccess={handleDepositSuccess}
+          onClose={() => setShowDepositWidget(false)}
+        />
       )}
     </div>
   )
