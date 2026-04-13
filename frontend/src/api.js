@@ -1,4 +1,4 @@
-const BASE = 'http://localhost:3001';
+const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 export async function createBet(creator_address, statement, amount_usdc) {
 	const res = await fetch(`${BASE}/bets`, {
