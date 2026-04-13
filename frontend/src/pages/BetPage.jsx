@@ -113,6 +113,7 @@ export default function BetPage() {
 
       // Step 2: get LI.FI Composer quote
       setMsg('Getting vault quote...')
+      console.log('Bet ID for quote:', bet.id, 'Invite:', bet.invite_code)
       const quote = await getDepositQuote(bet.id, wallet)
       if (!quote?.transactionRequest) throw new Error('No transaction data returned')
 
@@ -168,18 +169,20 @@ export default function BetPage() {
       console.log('Value:', tx.value)
       console.log('Data prefix:', tx.data?.slice(0, 10))
 
+      const depositParams = {
+        from: wallet,
+        to: tx.to,
+        data: tx.data,
+      }
+      // Only add value if it's a real non-zero amount
+      const txValue = tx.value
+      if (txValue && txValue !== '0x0' && txValue !== '0x' && txValue !== '0') {
+        depositParams.value = txValue
+      }
+
       const depositTxHash = await window.ethereum.request({
         method: 'eth_sendTransaction',
-        params: [{
-          from: wallet,
-          to: tx.to,
-          data: tx.data,
-          value: tx.value && tx.value !== '0x0' && tx.value !== '0'
-            ? tx.value
-            : undefined
-          // NO gasLimit — this is the key fix
-          // NO chainId — MetaMask already knows
-        }]
+        params: [depositParams]
       })
 
       console.log('Deposit tx hash:', depositTxHash)
