@@ -1,4 +1,5 @@
 import { App as LiFiWidget } from '../../node_modules/@lifi/widget/dist/esm/App.js'
+import { useEffect } from 'react'
 
 const MORPHO_VAULT_ADDRESS = '0xbeefa7b88064feef0cee02aaebbd95d30df3878f'
 const BASE_CHAIN_ID = 8453
@@ -11,6 +12,13 @@ export default function LiFiDepositWidget({
   onSuccess, 
   onClose 
 }) {
+  useEffect(() => {
+    // ensure window.ethereum is available for widget
+    if (!window.ethereum) {
+      console.warn('No ethereum provider found')
+    }
+  }, [])
+
   const widgetConfig = {
     integrator: 'resolver-app',
     variant: 'compact',
