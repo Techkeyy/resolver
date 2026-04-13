@@ -9,16 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
-    "@lifi/wallet-management": "^3.22.8",
-    "@lifi/widget": "^3.40.12",
-    "@mui/core-downloads-tracker": "^9.0.0",
-    "@mui/material": "^9.0.0",
-    "@mui/material-pigment-css": "^9.0.0",
-    "@mui/system": "^9.0.0",
-    "@mui/types": "^9.0.0",
-    "@mui/utils": "^9.0.0",
+    "@lifi/widget": "3.7.0",
     "ethers": "^6.16.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

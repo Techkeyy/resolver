@@ -1,4 +1,4 @@
-import { App as LiFiWidget } from '../../node_modules/@lifi/widget/dist/esm/App.js'
+import { LiFiWidget } from '@lifi/widget'
 import { useEffect } from 'react'
 
 const MORPHO_VAULT_ADDRESS = '0xbeefa7b88064feef0cee02aaebbd95d30df3878f'
