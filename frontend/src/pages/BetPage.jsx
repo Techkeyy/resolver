@@ -4,7 +4,6 @@ import {
   getBetByInviteCode, acceptBet, lockFunds, getDepositQuote,
   resolveBet, confirmResolution, disputeBet
 } from '../api'
-import LiFiDepositWidget from '../components/LiFiDepositWidget'
 
 function shortAddr(addr) {
   if (!addr) return '???'
@@ -35,7 +34,6 @@ export default function BetPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
-  const [showDepositWidget, setShowDepositWidget] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -76,21 +74,7 @@ export default function BetPage() {
 
   async function handleLock() {
     if (!wallet) { setError('Connect wallet first'); return }
-    setShowDepositWidget(true)
-  }
-
-  async function handleDepositSuccess(txHash) {
-    setShowDepositWidget(false)
-    setLoading(true)
-    setMsg('Recording deposit...')
-    try {
-      const updated = await lockFunds(bet.id, wallet, txHash)
-      setBet(updated)
-      setMsg('Funds locked into vault! 🔒')
-    } catch(e) {
-      setError(e.message)
-    }
-    setLoading(false)
+    setError('Deposit flow disabled')
   }
 
   async function handleConfirm() {
@@ -329,16 +313,6 @@ export default function BetPage() {
         >
           Connect Wallet to Participate
         </button>
-      )}
-
-      {showDepositWidget && (
-        <LiFiDepositWidget
-          betId={bet.id}
-          userAddress={wallet}
-          amount={bet.amount_usdc}
-          onSuccess={handleDepositSuccess}
-          onClose={() => setShowDepositWidget(false)}
-        />
       )}
     </div>
   )
