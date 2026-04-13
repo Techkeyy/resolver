@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const BASE = 'http://localhost:3001';
 
 export async function createBet(creator_address, statement, amount_usdc) {
 	const res = await fetch(`${BASE}/bets`, {
@@ -80,4 +80,16 @@ export async function getBestVault() {
 	const res = await fetch(`${BASE}/earn/best-vault`);
 	if (!res.ok) throw new Error('Failed to fetch vault');
 	return res.json();
+}
+
+export async function getUserBets(wallet_address) {
+	const res = await fetch(`${BASE}/bets?wallet=${encodeURIComponent(wallet_address)}`)
+	if (!res.ok) return []
+	return res.json()
+}
+
+export async function getWalletBalance(wallet_address) {
+	const res = await fetch(`${BASE}/wallet/balance?address=${encodeURIComponent(wallet_address)}`)
+	if (!res.ok) return null
+	return res.json()
 }

@@ -4,6 +4,7 @@ import {
   getBetByInviteCode, acceptBet, lockFunds, getDepositQuote,
   resolveBet, confirmResolution, disputeBet
 } from '../api'
+import WalletBar from '../components/WalletBar'
 
 function shortAddr(addr) {
   if (!addr) return '???'
@@ -61,6 +62,11 @@ export default function BetPage() {
     localStorage.setItem('resolver_wallet', accounts[0])
   }
 
+  function disconnectWallet() {
+    setWallet(null)
+    localStorage.removeItem('resolver_wallet')
+  }
+
   async function handleAccept() {
     if (!wallet) { setError('Connect wallet first'); return }
     setLoading(true); setError('')
@@ -74,7 +80,124 @@ export default function BetPage() {
 
   async function handleLock() {
     if (!wallet) { setError('Connect wallet first'); return }
-    setError('Deposit flow disabled')
+    setLoading(true); setError('')
+    setMsg('Getting deposit quote...')
+    
+    try {
+      // Step 1: Switch to Arbitrum (chainId 42161)
+      try {
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0xa4b1' }], // 42161 in hex
+        })
+      } catch (switchError) {
+        // Chain not added yet — add it
+        if (switchError.code === 4902) {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: '0xa4b1',
+              chainName: 'Arbitrum One',
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+              rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+              blockExplorerUrls: ['https://arbiscan.io']
+            }]
+          })
+        } else {
+          throw switchError
+        }
+      }
+
+      // Step 2: Get deposit quote from LI.FI via our backend
+      setMsg('Getting best vault rate...')
+      const quote = await getDepositQuote(bet.id, wallet)
+      
+      if (!quote.transactionRequest) {
+        throw new Error('No transaction data in quote')
+      }
+
+      const tx = quote.transactionRequest
+
+      // Step 3: Check USDC allowance and approve if needed
+      // USDC on Arbitrum
+      const USDC_ADDRESS = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831'
+      const amountInUnits = Math.floor(bet.amount_usdc * 1_000_000).toString()
+      
+      // Encode allowance check: allowance(owner, spender)
+      const allowanceData = '0xdd62ed3e' + 
+        wallet.slice(2).padStart(64, '0') + 
+        (tx.to || '').slice(2).padStart(64, '0')
+
+      const allowanceHex = await window.ethereum.request({
+        method: 'eth_call',
+        params: [{ to: USDC_ADDRESS, data: allowanceData }, 'latest']
+      })
+      
+      const allowance = parseInt(allowanceHex, 16)
+      const needed = parseInt(amountInUnits)
+
+      if (allowance < needed) {
+        setMsg('Approving USDC spend...')
+        // Encode approve(spender, amount)
+        const maxUint256 = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+        const approveData = '0x095ea7b3' + 
+          (tx.to || '').slice(2).padStart(64, '0') + 
+          maxUint256
+
+        const approveTx = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from: wallet,
+            to: USDC_ADDRESS,
+            data: approveData,
+            chainId: '0xa4b1'
+          }]
+        })
+        
+        setMsg('Approval sent, waiting...')
+        // Wait 3 seconds for approval to propagate
+        await new Promise(resolve => setTimeout(resolve, 3000))
+      }
+
+      // Step 4: Send the deposit transaction
+      setMsg('Depositing into vault...')
+      const depositTx = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{
+          from: wallet,
+          to: tx.to,
+          data: tx.data,
+          value: tx.value || '0x0',
+          gasLimit: tx.gasLimit || tx.gas || '0x493E0',
+          chainId: '0xa4b1'
+        }]
+      })
+
+      // Step 5: Record the lock in our backend
+      setMsg('Confirming...')
+      const updated = await lockFunds(bet.id, wallet, depositTx)
+      setBet(updated)
+      setMsg('Funds locked into vault! 🔒')
+
+    } catch (e) {
+      if (e.code === 4001) {
+        setError('Transaction rejected by user')
+      } else {
+        setError(e.message || 'Transaction failed')
+      }
+    }
+    setLoading(false)
+  }
+
+  async function handleResolve(winnerAddress) {
+    if (!wallet) { setError('Connect wallet first'); return }
+    setLoading(true); setError('')
+    try {
+      const updated = await resolveBet(bet.id, wallet, winnerAddress)
+      setBet(updated)
+      setMsg('Resolution proposed. Waiting for opponent to confirm.')
+    } catch (e) { setError(e.message) }
+    setLoading(false)
   }
 
   async function handleConfirm() {
@@ -172,12 +295,7 @@ export default function BetPage() {
         <div>
           <div className="logo">RESOLVER</div>
         </div>
-        <button
-          className={`wallet-btn ${wallet ? 'wallet-connected' : ''}`}
-          onClick={connectWallet}
-        >
-          {wallet ? shortAddr(wallet) : 'Connect'}
-        </button>
+        <WalletBar wallet={wallet} onConnect={connectWallet} onDisconnect={disconnectWallet} />
       </div>
 
       <StatusBar status={bet.status} />
