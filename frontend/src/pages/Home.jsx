@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createBet, getBestVault } from '../api'
+import { createBet, getBestVault, getUserBets } from '../api'
 import WalletBar from '../components/WalletBar'
 import HowItWorks from '../components/HowItWorks'
 import BetsDashboard from '../components/BetsDashboard'

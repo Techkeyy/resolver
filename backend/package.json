@@ -4,14 +4,13 @@
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "nanoid": "3.3.7",
-    "pg": "^8.11.0"
+    "pg": "^8.20.0"
   }
 }

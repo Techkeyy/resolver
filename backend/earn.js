@@ -4,21 +4,8 @@ const BASE_CHAIN_ID = 8453;
 const USDC_ADDRESS_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-const BEST_VAULT = {
-  name: 'BBQUSDC',
-  address: '0xbeefa7b88064feef0cee02aaebbd95d30df3878f',
-  chainId: 8453,
-  network: 'Base',
-  protocol: { name: 'morpho-v1' },
-  analytics: {
-    apy: { base: 4.68673, total: 4.68673 },
-    tvl: { usd: '5000000' }
-  },
-  isTransactional: true
-};
-
-let cachedBestVault = BEST_VAULT;
-let cachedBestVaultAt = Date.now();
+let cachedBestVault = null;
+let cachedBestVaultAt = 0;
 
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
@@ -77,7 +64,33 @@ async function getVaults() {
 }
 
 async function getBestUSDCVault() {
-  return BEST_VAULT;
+  if (cachedBestVault && Date.now() - cachedBestVaultAt < CACHE_TTL_MS) {
+    return cachedBestVault;
+  }
+
+  const url = new URL('/v1/earn/vaults', BASE_EARN_URL);
+  url.searchParams.set('chainId', String(BASE_CHAIN_ID));
+  url.searchParams.set('asset', 'USDC');
+  url.searchParams.set('sortBy', 'apy');
+  url.searchParams.set('limit', '10');
+
+  const payload = await fetchJson(url.toString(), {
+    method: 'GET',
+    headers: earnHeaders()
+  });
+
+  const vaults = toVaultList(payload);
+  if (!vaults || vaults.length === 0) {
+    throw new Error('No USDC vaults found on Base');
+  }
+
+  const bestVault = vaults[0];
+  const apy = bestVault.analytics?.apy?.total || bestVault.analytics?.apy?.base || 'n/a';
+
+  cachedBestVault = bestVault;
+  cachedBestVaultAt = Date.now();
+  console.log(`Best vault: ${bestVault.name} | APY: ${apy}%`);
+  return bestVault;
 }
 
 async function getVaultByAddress(chainId, address) {
@@ -93,39 +106,25 @@ async function getVaultByAddress(chainId, address) {
 
 async function getDepositQuote(fromWalletAddress, amountUSDC) {
   const vault = await getBestUSDCVault();
-  // Convert USDC amount to 6-decimal units
-  const fromAmount = Math.floor(amountUSDC * 1_000_000).toString();
+  const lpTokenAddress = vault?.lpTokens?.[0]?.address;
 
-  // Use vault.address directly as toToken per LI.FI docs
-  const params = new URLSearchParams({
-    fromChain: '8453',
-    toChain: '8453',
-    fromToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-    toToken: vault.address,
-    fromAddress: fromWalletAddress,
-    toAddress: fromWalletAddress,
-    fromAmount: fromAmount
+  if (!lpTokenAddress) {
+    throw new Error('Best vault does not expose an LP token address');
+  }
+
+  const url = new URL('/v1/quote', COMPOSER_URL);
+  url.searchParams.set('fromChain', String(BASE_CHAIN_ID));
+  url.searchParams.set('toChain', String(BASE_CHAIN_ID));
+  url.searchParams.set('fromToken', USDC_ADDRESS_BASE);
+  url.searchParams.set('toToken', lpTokenAddress);
+  url.searchParams.set('fromAddress', fromWalletAddress);
+  url.searchParams.set('toAddress', fromWalletAddress);
+  url.searchParams.set('fromAmount', String(amountUSDC));
+
+  return fetchJson(url.toString(), {
+    method: 'GET',
+    headers: earnHeaders()
   });
-
-  console.log(`Getting Composer quote for ${amountUSDC} USDC into vault ${vault.address}`);
-
-  const res = await fetch(
-    `https://li.quest/v1/quote?${params}`
-  );
-
-  const quote = await res.json();
-
-  if (quote.message || quote.error) {
-    throw new Error(quote.message || quote.error);
-  }
-
-  if (!quote.transactionRequest) {
-    console.log('Quote response:', JSON.stringify(quote, null, 2));
-    throw new Error('No transaction request in quote response');
-  }
-
-  console.log('Quote received successfully, tx to:', quote.transactionRequest.to);
-  return quote;
 }
 
 async function getUserPositions(walletAddress) {
@@ -151,7 +150,6 @@ async function getUserPositions(walletAddress) {
 }
 
 module.exports = {
-  BEST_VAULT,
   getBestUSDCVault,
   getVaultByAddress,
   getDepositQuote,

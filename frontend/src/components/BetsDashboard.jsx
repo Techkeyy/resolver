@@ -31,7 +31,6 @@ export default function BetsDashboard({ wallet }) {
 
   const current = tab === 'live' ? live : tab === 'settled' ? settled : disputed
 
-  // P&L: sum winnings minus losses
   const pnl = settled.reduce((acc, b) => {
     if (!wallet) return acc
     const won = b.winner_address?.toLowerCase() === wallet.toLowerCase()

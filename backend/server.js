@@ -5,7 +5,6 @@ const cors = require('cors');
 const crypto = require('crypto');
 const { pool, initDB } = require('./db');
 const {
-  BEST_VAULT,
   getBestUSDCVault,
   getDepositQuote,
   getVaults
@@ -30,26 +29,27 @@ function generateInviteCode() {
 }
 
 async function getBetById(id) {
-  const r = await pool.query('SELECT * FROM bets WHERE id = $1', [id]);
-  return r.rows[0] || null;
+  const result = await pool.query('SELECT * FROM bets WHERE id = $1 LIMIT 1', [id]);
+  return result.rows[0] || null;
 }
 
-async function getBetByInviteCode(code) {
-  const r = await pool.query(
-    'SELECT * FROM bets WHERE UPPER(invite_code) = UPPER($1)', [code]
-  );
-  return r.rows[0] || null;
+async function getBetByInviteCode(inviteCode) {
+  const code = String(inviteCode || '').toUpperCase();
+  const result = await pool.query('SELECT * FROM bets WHERE UPPER(invite_code) = $1 LIMIT 1', [code]);
+  return result.rows[0] || null;
 }
 
-async function updateBet(id, fields) {
-  const keys = Object.keys(fields);
-  const values = Object.values(fields);
-  const setClause = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
-  const r = await pool.query(
-    `UPDATE bets SET ${setClause} WHERE id = $1 RETURNING *`,
-    [id, ...values]
-  );
-  return r.rows[0];
+async function updateBetById(id, fields) {
+  const entries = Object.entries(fields);
+
+  if (entries.length === 0) {
+    return getBetById(id);
+  }
+
+  const setClause = entries.map(([column], index) => `${column} = $${index + 2}`).join(', ');
+  const values = [id, ...entries.map(([, value]) => value)];
+  const result = await pool.query(`UPDATE bets SET ${setClause} WHERE id = $1 RETURNING *`, values);
+  return result.rows[0] || null;
 }
 
 function earnHeaders() {
@@ -89,7 +89,7 @@ function summarizeVaults(vaults) {
   }));
 }
 
-app.get('/health', async (_req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
@@ -142,12 +142,9 @@ app.post('/bets/:id/quote', async (req, res) => {
 
   const { user_address } = req.body || {};
 
-  try {
-    const quote = await getDepositQuote(user_address, bet.amount_usdc);
-    res.json(quote);
-  } catch (error) {
-    sendError(res, error.status || 500, error.message);
-  }
+  getDepositQuote(user_address, bet.amount_usdc)
+    .then((quote) => res.json(quote))
+    .catch((error) => sendError(res, error.status || 500, error.message));
 });
 
 app.post('/bets', async (req, res) => {
@@ -158,8 +155,8 @@ app.post('/bets', async (req, res) => {
       return sendError(res, 400, 'Missing required fields');
     }
 
-    if (Number(amount_usdc) <= 0) {
-      return sendError(res, 400, 'amount_usdc must be greater than 0');
+    if (Number(amount_usdc) < 1) {
+      return sendError(res, 400, 'amount_usdc must be at least 1');
     }
 
     if (!String(creator_address).startsWith('0x')) {
@@ -178,7 +175,7 @@ app.post('/bets', async (req, res) => {
       creator_locked: false,
       opponent_locked: false,
       vault_address: vault.address,
-      vault_chain_id: vault.chainId || 42161,
+      vault_chain_id: vault.chainId || 8453,
       creator_deposit_tx: null,
       opponent_deposit_tx: null,
       proposed_winner_address: null,
@@ -189,22 +186,58 @@ app.post('/bets', async (req, res) => {
       resolved_at: null
     };
 
-    await pool.query(
-      `INSERT INTO bets (id,invite_code,statement,amount_usdc,
-       creator_address,opponent_address,status,creator_locked,
-       opponent_locked,vault_address,vault_chain_id,
-       creator_deposit_tx,opponent_deposit_tx,
-       proposed_winner_address,proposed_by_address,
-       winner_address,payout_tx)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-      [bet.id, bet.invite_code, bet.statement, bet.amount_usdc,
-       bet.creator_address, null, 'CREATED', false, false,
-       bet.vault_address, 8453, null, null, null, null, null, null]
+    const insertResult = await pool.query(
+      `INSERT INTO bets (
+        id,
+        invite_code,
+        statement,
+        amount_usdc,
+        creator_address,
+        opponent_address,
+        status,
+        creator_locked,
+        opponent_locked,
+        vault_address,
+        vault_chain_id,
+        creator_deposit_tx,
+        opponent_deposit_tx,
+        proposed_winner_address,
+        proposed_by_address,
+        winner_address,
+        payout_tx,
+        created_at,
+        resolved_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+      ) RETURNING *`,
+      [
+        bet.id,
+        bet.invite_code,
+        bet.statement,
+        bet.amount_usdc,
+        bet.creator_address,
+        bet.opponent_address,
+        bet.status,
+        bet.creator_locked,
+        bet.opponent_locked,
+        bet.vault_address,
+        bet.vault_chain_id,
+        bet.creator_deposit_tx,
+        bet.opponent_deposit_tx,
+        bet.proposed_winner_address,
+        bet.proposed_by_address,
+        bet.winner_address,
+        bet.payout_tx,
+        bet.created_at,
+        bet.resolved_at
+      ]
     );
 
+    const createdBet = insertResult.rows[0];
+
     return res.status(201).json({
-      ...bet,
-      invite_url: `http://localhost:5173/bet/${bet.invite_code}`
+      ...createdBet,
+      invite_url: `http://localhost:5173/bet/${createdBet.invite_code}`
     });
   } catch (error) {
     return sendError(res, error.status || 500, error.message);
@@ -252,7 +285,7 @@ app.post('/bets/invite/:invite_code/accept', async (req, res) => {
     return sendError(res, 400, 'Cannot accept your own bet');
   }
 
-  const updatedBet = await updateBet(bet.id, {
+  const updatedBet = await updateBetById(bet.id, {
     opponent_address,
     status: 'ACCEPTED'
   });
@@ -295,13 +328,14 @@ app.post('/bets/:id/lock', async (req, res) => {
     updates.opponent_deposit_tx = tx_hash;
   }
 
-  if (updates.creator_locked && updates.opponent_locked) {
-    updates.status = 'LOCKED';
-  } else if ((isCreator ? true : bet.creator_locked) && (isOpponent ? true : bet.opponent_locked)) {
+  const creatorLocked = isCreator ? true : bet.creator_locked;
+  const opponentLocked = isOpponent ? true : bet.opponent_locked;
+
+  if (creatorLocked && opponentLocked) {
     updates.status = 'LOCKED';
   }
 
-  const nextBet = await updateBet(bet.id, updates);
+  const nextBet = await updateBetById(bet.id, updates);
 
   return res.json(nextBet);
 });
@@ -333,7 +367,7 @@ app.post('/bets/:id/resolve', async (req, res) => {
     return sendError(res, 400, 'Not a participant');
   }
 
-  const updatedBet = await updateBet(bet.id, {
+  const updatedBet = await updateBetById(bet.id, {
     proposed_winner_address: winner_address,
     proposed_by_address: resolver_address
   });
@@ -366,10 +400,10 @@ app.post('/bets/:id/confirm', async (req, res) => {
     return sendError(res, 400, 'Proposer cannot confirm their own resolution');
   }
 
-  const updatedBet = await updateBet(bet.id, {
+  const updatedBet = await updateBetById(bet.id, {
     winner_address: bet.proposed_winner_address,
     status: 'RESOLVED',
-    resolved_at: new Date()
+    resolved_at: new Date().toISOString()
   });
 
   return res.json(updatedBet);
@@ -396,16 +430,55 @@ app.post('/bets/:id/dispute', async (req, res) => {
     return sendError(res, 400, 'Not a participant');
   }
 
-  const updatedBet = await updateBet(bet.id, {
+  const updatedBet = await updateBetById(bet.id, {
     status: 'DISPUTED'
   });
 
   return res.json(updatedBet);
 });
 
-app.get('/bets', async (_req, res) => {
-  const r = await pool.query('SELECT * FROM bets ORDER BY created_at DESC');
-  return res.json(r.rows);
+app.get('/bets', async (req, res) => {
+  const { wallet } = req.query;
+  let result;
+
+  if (wallet) {
+    result = await pool.query(
+      'SELECT * FROM bets WHERE LOWER(creator_address) = LOWER($1) OR LOWER(opponent_address) = LOWER($1) ORDER BY created_at DESC',
+      [wallet]
+    );
+  } else {
+    result = await pool.query('SELECT * FROM bets ORDER BY created_at DESC');
+  }
+
+  return res.json(result.rows);
+});
+
+app.get('/wallet/balance', async (req, res) => {
+  const { address } = req.query;
+
+  if (!address) {
+    return res.json({ usdc: null });
+  }
+
+  try {
+    const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+    const data = '0x70a08231' + address.slice(2).padStart(64, '0');
+    const rpcRes = await fetch('https://mainnet.base.org', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', method: 'eth_call',
+        params: [{ to: USDC, data }, 'latest'],
+        id: 1
+      })
+    });
+    const json = await rpcRes.json();
+    const raw = parseInt(json.result || '0x0', 16);
+    const usdc = (raw / 1_000_000).toFixed(2);
+    res.json({ usdc });
+  } catch (error) {
+    res.json({ usdc: null });
+  }
 });
 
 async function start() {
@@ -413,7 +486,16 @@ async function start() {
     await initDB();
     app.listen(port, () => {
       console.log(`Resolver backend listening on port ${port}`);
-      console.log(`Boot vault: ${BEST_VAULT.name} | APY: ${BEST_VAULT.analytics.apy.total}% | Morpho on Base`);
+      (async () => {
+        try {
+          const vault = await getBestUSDCVault();
+          const apy = vault.analytics?.apy?.total || vault.analytics?.apy?.base || 'n/a';
+          console.log(`Boot vault: ${vault.name} | APY: ${apy}%`);
+        } catch (error) {
+          console.error('Initial LI.FI Earn vault check failed');
+          console.error(error.message);
+        }
+      })();
     });
   } catch (error) {
     console.error('Failed to initialize PostgreSQL');

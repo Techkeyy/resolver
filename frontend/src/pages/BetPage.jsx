@@ -84,23 +84,22 @@ export default function BetPage() {
     setMsg('Getting deposit quote...')
     
     try {
-      // Step 1: Switch to Arbitrum (chainId 42161)
+      // Step 1: Switch to Base (chainId 8453)
       try {
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0xa4b1' }], // 42161 in hex
+          params: [{ chainId: '0x2105' }],
         })
       } catch (switchError) {
-        // Chain not added yet — add it
         if (switchError.code === 4902) {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
             params: [{
-              chainId: '0xa4b1',
-              chainName: 'Arbitrum One',
+              chainId: '0x2105',
+              chainName: 'Base',
               nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              rpcUrls: ['https://arb1.arbitrum.io/rpc'],
-              blockExplorerUrls: ['https://arbiscan.io']
+              rpcUrls: ['https://mainnet.base.org'],
+              blockExplorerUrls: ['https://basescan.org']
             }]
           })
         } else {
@@ -119,8 +118,7 @@ export default function BetPage() {
       const tx = quote.transactionRequest
 
       // Step 3: Check USDC allowance and approve if needed
-      // USDC on Arbitrum
-      const USDC_ADDRESS = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831'
+      const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
       const amountInUnits = Math.floor(bet.amount_usdc * 1_000_000).toString()
       
       // Encode allowance check: allowance(owner, spender)
@@ -150,12 +148,11 @@ export default function BetPage() {
             from: wallet,
             to: USDC_ADDRESS,
             data: approveData,
-            chainId: '0xa4b1'
+            chainId: '0x2105'
           }]
         })
         
         setMsg('Approval sent, waiting...')
-        // Wait 3 seconds for approval to propagate
         await new Promise(resolve => setTimeout(resolve, 3000))
       }
 
@@ -169,7 +166,7 @@ export default function BetPage() {
           data: tx.data,
           value: tx.value || '0x0',
           gasLimit: tx.gasLimit || tx.gas || '0x493E0',
-          chainId: '0xa4b1'
+          chainId: '0x2105'
         }]
       })
 
